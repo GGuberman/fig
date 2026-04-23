@@ -1563,8 +1563,8 @@ async function showOnboardingOrDashboard() {
 }
 
 async function init() {
-  document.getElementById('app-loading').style.display = 'none';
   db = await openDB();
+  document.getElementById('app-loading').style.display = 'none';
   const passcode = LS.get('fig_passcode');
   if (passcode !== null) {
     // Passcode set — show screen

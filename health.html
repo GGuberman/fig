@@ -10,20 +10,7 @@ html,body{min-height:100%;background:var(--bg, #0a0a0f);color:var(--text, #e8e4f
 input,textarea,button,select{font-family:Georgia,serif}
 input[type=date]::-webkit-calendar-picker-indicator{filter:invert(0.5);cursor:pointer}
 </style>
-<script>
-(function(){
-  const THEME_KEY='fig_theme_v1';
-  const DEFS={bg:'#0a0a0f',surface:'#12121a',surface2:'#1a1a26',border:'#252535',accent:'#9b7fe8',accent2:'#c4aaff',text:'#e8e4f0',muted:'#6b6880'};
-  try{
-    const s=localStorage.getItem(THEME_KEY);
-    const t=s?{...DEFS,...JSON.parse(s)}:DEFS;
-    const r=document.documentElement;
-    Object.entries(t).forEach(([k,v])=>{if(k!=='name')r.style.setProperty('--'+k,v);});
-    r.style.setProperty('--accent-dim',t.accent+'22');
-    r.style.setProperty('--accent-mid',t.accent+'44');
-  }catch(e){}
-})();
-</script>
+
 </head>
 <body>
 <div id="root"></div>
