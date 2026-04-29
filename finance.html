@@ -198,10 +198,29 @@ input[type=file]{display:none}
 </head>
 <body>
 
-<div style="position:fixed;top:12px;left:12px;z-index:999">
+<div style="position:fixed;top:12px;left:12px;z-index:999;display:flex;gap:6px">
     <a href="index.html" style="background:#12121a;border:1px solid #252535;border-radius:6px;padding:5px 10px;color:#c4aaff;font-family:'DM Mono',monospace;font-size:0.6rem;letter-spacing:0.12em;text-transform:uppercase;text-decoration:none">← Fig</a>
+    <button onclick="figEmergencyReset()" style="background:#12121a;border:1px solid #252535;border-radius:6px;padding:5px 10px;color:#6b6880;font-family:'DM Mono',monospace;font-size:0.6rem;letter-spacing:0.12em;text-transform:uppercase;cursor:pointer">Reset</button>
   </div>
-  <div id="app-loading">Loading Fig...</div>
+  <div id="app-loading" style="display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;color:#6b6880;font-size:0.8rem;letter-spacing:0.1em;gap:14px;padding:0 24px;text-align:center">
+    <div id="app-loading-text">Loading Fig…</div>
+    <div id="app-loading-hint" style="font-size:0.65rem;color:#6b6880;max-width:380px;line-height:1.7;display:none">Stuck here? IndexedDB may be blocked (Safari private mode or opening via <code>file://</code>). Try a hard refresh (⌘⇧R / Ctrl+Shift+R), or click Reset above.</div>
+  </div>
+  <script>
+    // Always-available emergency reset, declared before any later script can fail
+    window.figEmergencyReset = function() {
+      if (!confirm('Reset Fig and clear all local data? This will not affect your remote backups.')) return;
+      try { indexedDB.deleteDatabase('fig_v1'); } catch (e) {}
+      try { localStorage.clear(); } catch (e) {}
+      window.location.reload();
+    };
+    // If init hasn't hidden the loader after 6s, surface the recovery hint
+    setTimeout(function() {
+      var el = document.getElementById('app-loading');
+      var hint = document.getElementById('app-loading-hint');
+      if (el && el.style.display !== 'none' && hint) hint.style.display = 'block';
+    }, 6000);
+  </script>
 <div id="passcode-screen">
   <div class="pc-logo">Fig Finance</div>
   <div class="pc-sub">Your financial picture</div>
@@ -359,7 +378,15 @@ let db = null;
 
 async function openDB() {
   return new Promise((resolve, reject) => {
-    const req = indexedDB.open(DB_NAME, DB_VERSION);
+    if (typeof indexedDB === 'undefined' || !indexedDB) {
+      reject(new Error('IndexedDB is not available. Try a different browser, leave private/incognito mode, or open Fig over http(s) instead of file://.'));
+      return;
+    }
+    let req;
+    try { req = indexedDB.open(DB_NAME, DB_VERSION); }
+    catch (e) { reject(new Error('IndexedDB open failed: ' + (e && e.message || e))); return; }
+    // Some Safari/private contexts hang forever — fail fast after 5s.
+    const timer = setTimeout(() => reject(new Error('IndexedDB open timed out. Try Reset, or open in a regular browser window.')), 5000);
     req.onupgradeneeded = e => {
       const d = e.target.result;
       if (!d.objectStoreNames.contains('config')) d.createObjectStore('config');
@@ -367,8 +394,9 @@ async function openDB() {
       if (!d.objectStoreNames.contains('chat')) d.createObjectStore('chat', {keyPath:'id',autoIncrement:true});
       if (!d.objectStoreNames.contains('snapshots')) d.createObjectStore('snapshots', {keyPath:'ts'});
     };
-    req.onsuccess = e => resolve(e.target.result);
-    req.onerror = () => reject(req.error);
+    req.onsuccess = e => { clearTimeout(timer); resolve(e.target.result); };
+    req.onerror   = ()=> { clearTimeout(timer); reject(req.error || new Error('IndexedDB open errored')); };
+    req.onblocked = ()=> { clearTimeout(timer); reject(new Error('IndexedDB open is blocked by another tab using Fig. Close other Fig tabs and reload.')); };
   });
 }
 
@@ -1554,8 +1582,23 @@ async function showOnboardingOrDashboard() {
     const months = {};
     for (const k of monthKeys) months[k] = await dbGet('months', k);
     // Restore chat history
-    chatHistory = await dbGetAll('chat');
-    buildDashboard(config, months);
+    try { chatHistory = await dbGetAll('chat'); } catch (e) { chatHistory = []; }
+    try {
+      buildDashboard(config, months);
+    } catch (e) {
+      // Dashboard render failed — surface a recoverable error instead of leaving a blank screen
+      console.error('Dashboard render failed:', e);
+      document.getElementById('dashboard').style.display = 'none';
+      document.getElementById('onboarding').style.display = 'none';
+      const al = document.getElementById('app-loading');
+      if (al) {
+        al.style.display = 'flex';
+        al.style.color = 'var(--red)';
+        document.getElementById('app-loading-text').innerHTML =
+          'Couldn’t render the dashboard.<br><span style="color:var(--muted);font-size:0.7rem;font-weight:normal">' +
+          (e && e.message || e) + '</span><br><span style="color:var(--muted);font-size:0.7rem;font-weight:normal">Click Reset above to start fresh.</span>';
+      }
+    }
   } else {
     document.getElementById('onboarding').style.display = 'block';
     renderOBStep();
