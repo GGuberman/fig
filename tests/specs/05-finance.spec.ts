@@ -10,7 +10,7 @@ test.describe('Finance page', () => {
     const errors: string[] = [];
     page.on('pageerror', e => errors.push(e.message));
 
-    await page.goto('/finance.html');
+    await page.goto('/index.html#finance');
     // Dismiss first-visit overlay so it doesn't interfere
     await page.evaluate(() => window.figDismissLauncher());
     await expect(page.locator('#app-loading')).toBeHidden({ timeout: 15000 });
