@@ -131,11 +131,10 @@ function render() {
   if (!_launcherEl) return;
   var html = '';
   if (_isSettings) {
-    // Settings mode: skip welcome/done
     if (_step === 0) html = figRenderIdentity();
     else if (_step === 1) html = figRenderLLM();
   } else {
-    if (_step === 0) html = figRenderWelcome();
+    if (_step === 0) html = figRenderAccount();
     else if (_step === 1) html = figRenderIdentity();
     else if (_step === 2) html = figRenderLLM();
     else if (_step === 3) html = figRenderDone();
@@ -152,31 +151,86 @@ function prevStep() {
   if (_step > 0) { _step--; render(); }
 }
 
-// ── Welcome step ──────────────────────────────
-function figRenderWelcome() {
+// ── Account step ──────────────────────────────
+function figRenderAccount() {
+  var cfg = getFigConfig();
+  var ident = cfg.identity || {};
+  var workerConnected = ident.worker && ident.worker.handle && ident.worker.token;
+  var sync = lsGet('fig_sync');
+  var hasWorkerUrl = sync && sync.workerUrl;
+
+  if (workerConnected) {
+    return `
+      <span style="font-size:1.5rem;margin-bottom:6px;display:block">👤</span>
+      <div class="fig-h1">Your account</div>
+      <div class="fig-status connected"><span class="fig-dot-online"></span> Signed in as <b>@${ident.worker.handle}</b></div>
+      <div class="fig-desc">Your account is connected. You can manage it in Settings or proceed to set up identity and LLM.</div>
+      <div class="fig-btn-row">
+        <button class="fig-btn ghost" onclick="figDismissLauncher()">Skip setup</button>
+        <span class="fig-spacer"></span>
+        <button class="fig-btn primary" onclick="nextStep()">Next →</button>
+      </div>`;
+  }
+
   return `
-    <span class="fig-welcome-icon">🌱</span>
-    <div class="fig-h1">Welcome to Fig</div>
-    <div class="fig-desc">
-      Fig is your personal data layer — a private wiki, health tracker, and finance dashboard
-      that lives entirely in your browser. Everything is local-first and opt-in.
-    </div>
-    <div class="fig-desc" style="margin-bottom:12px">
-      Let's quickly set up two things:
-    </div>
-    <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:24px">
-      <div style="display:flex;align-items:center;gap:10px;padding:10px 12px;background:var(--surface2,#1a1a26);border-radius:8px;font-size:0.72rem;color:var(--muted,#6b6880)">
-        <span style="font-size:1rem">🌐</span> Proof of personhood with World ID <span style="color:var(--muted,#6b6880);font-size:0.6rem">(optional)</span>
+    <span style="font-size:1.5rem;margin-bottom:6px;display:block">👤</span>
+    <div class="fig-h1">Create your account</div>
+    <div class="fig-desc">Optionally create a Fig Handle — a lightweight account for cloud sync, identity binding, and attestations. Everything works without one too.</div>
+    ${hasWorkerUrl ? `
+      <div class="fig-field">
+        <label>Fig Handle</label>
+        <input id="fig-acc-handle" type="text" placeholder="e.g. gg" maxlength="32" autocomplete="off" onkeydown="if(event.key==='Enter')figCreateAccount()">
+        <div class="fig-field-help">2–32 characters: letters, numbers, _ and -</div>
       </div>
-      <div style="display:flex;align-items:center;gap:10px;padding:10px 12px;background:var(--surface2,#1a1a26);border-radius:8px;font-size:0.72rem;color:var(--muted,#6b6880)">
-        <span style="font-size:1rem">🔑</span> Your own LLM provider key <span style="color:var(--muted,#6b6880);font-size:0.6rem">(optional)</span>
-      </div>
-    </div>
+      <div class="fig-btn-row" style="padding-top:0">
+        <button class="fig-btn primary" onclick="figCreateAccount()" style="padding:8px 18px;font-size:0.68rem">Create</button>
+        <span id="fig-acc-toast" class="fig-toast" style="min-height:0"></span>
+      </div>` : `
+      <div class="fig-desc" style="background:var(--surface2,#1a1a26);padding:12px 14px;border-radius:8px;margin-bottom:16px">
+        To create an account, deploy the Fig Worker and set the Worker URL in <b>Settings → Cloud sync</b>. Then come back here.
+      </div>`}
     <div class="fig-btn-row">
       <button class="fig-btn ghost" onclick="figDismissLauncher()">Skip — just show me the app</button>
       <span class="fig-spacer"></span>
-      <button class="fig-btn primary" onclick="nextStep()">Get started</button>
+      <button class="fig-btn primary" onclick="nextStep()">Skip this step →</button>
     </div>`;
+}
+
+function figCreateAccount() {
+  var input = document.getElementById('fig-acc-handle');
+  if (!input) return;
+  var handle = input.value.trim();
+  if (!handle) { input.focus(); return; }
+  if (!/^[a-zA-Z0-9_-]{2,32}$/.test(handle)) {
+    alert('Invalid handle. Use letters, numbers, _ and - (2-32 chars).');
+    return;
+  }
+  var sync = lsGet('fig_sync');
+  var workerUrl = sync && sync.workerUrl;
+  if (!workerUrl) { alert('Worker URL not configured. Set it in Settings → Cloud sync first.'); return; }
+  var toast = document.getElementById('fig-acc-toast');
+  if (toast) { toast.className = 'fig-toast'; toast.textContent = 'Creating…'; }
+  var btn = document.querySelector('#fig-acc-toast') && document.querySelector('#fig-acc-toast').previousElementSibling;
+  if (btn) btn.disabled = true;
+  fetch(workerUrl.replace(/\/$/, '') + '/auth/register', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username: handle })
+  }).then(function(r) { return r.json().then(function(d) { return { ok: r.ok, status: r.status, data: d }; }); })
+  .then(function(res) {
+    if (!res.ok) {
+      if (res.status === 409) { alert('Handle taken. Try another.'); if (btn) btn.disabled = false; return; }
+      throw new Error(res.data.error || ('HTTP ' + res.status));
+    }
+    var cfg = getFigConfig();
+    if (!cfg.identity) cfg.identity = {};
+    cfg.identity.worker = { handle: res.data.username, token: res.data.token, createdAt: new Date().toISOString() };
+    setFigConfig(cfg);
+    if (toast) { toast.className = 'fig-toast ok'; toast.textContent = '✓ Created @' + res.data.username; }
+    setTimeout(function() { render(); }, 600);
+  }).catch(function(e) {
+    if (toast) { toast.className = 'fig-toast err'; toast.textContent = 'Failed: ' + (e.message || e); }
+    if (btn) btn.disabled = false;
+  });
 }
 
 // ── Identity step ─────────────────────────────
@@ -184,12 +238,11 @@ function figRenderIdentity() {
   var cfg = getFigConfig();
   var ident = cfg.identity || {};
   var widConnected = ident.worldid && ident.worldid.nullifier_hash;
-  var workerConnected = ident.worker && ident.worker.handle && ident.worker.token;
   var bskyConnected = ident.bsky && ident.bsky.handle && ident.bsky.accessJwt;
 
   return `
     <div class="fig-h2">Connect your identity</div>
-    <div class="fig-desc">Optional — link your identity for attestations, sync, and decentralized cred. Pick any or all, or skip.</div>
+    <div class="fig-desc">Optional — link your identity for attestations and decentralized cred.</div>
     <div class="fig-grid" style="grid-template-columns:1fr">
       <div class="fig-card ${widConnected?'selected':''}" onclick="figToggleWid()" style="display:flex;align-items:center;gap:12px;padding:12px 14px">
         <span style="font-size:1.2rem">🌐</span>
@@ -199,15 +252,6 @@ function figRenderIdentity() {
         </div>
         <span style="font-size:0.7rem;color:${widConnected ? 'var(--green,#7ec8a0)' : 'var(--muted,#6b6880)'}">${widConnected ? '✓ connected' : 'connect'}</span>
         ${widConnected ? '<button class="fig-btn danger" style="padding:4px 8px;font-size:0.55rem" onclick="event.stopPropagation();figDisconnectWid()">✕</button>' : ''}
-      </div>
-      <div class="fig-card ${workerConnected?'selected':''}" onclick="figToggleWorker()" style="display:flex;align-items:center;gap:12px;padding:12px 14px">
-        <span style="font-size:1.2rem">👤</span>
-        <div style="flex:1">
-          <div class="fig-card-name">Fig Handle</div>
-          <div class="fig-card-desc">${workerConnected ? '@' + ident.worker.handle : 'Lightweight account for cloud sync'}</div>
-        </div>
-        <span style="font-size:0.7rem;color:${workerConnected ? 'var(--green,#7ec8a0)' : 'var(--muted,#6b6880)'}">${workerConnected ? '✓ connected' : 'create'}</span>
-        ${workerConnected ? '<button class="fig-btn danger" style="padding:4px 8px;font-size:0.55rem" onclick="event.stopPropagation();figDisconnectWorker()">✕</button>' : ''}
       </div>
       <div class="fig-card ${bskyConnected?'selected':''}" onclick="figToggleBsky()" style="display:flex;align-items:center;gap:12px;padding:12px 14px">
         <span style="font-size:1.2rem">🦋</span>
@@ -505,8 +549,9 @@ function injectSentry() {
   var sentry = document.createElement('div');
   sentry.className = 'fig-sentry';
   sentry.id = 'fig-sentry';
+  var nav = (typeof navigateTo === 'function') ? 'navigateTo(\'dashboard\')' : 'window.location.href=\'index.html\'';
   sentry.innerHTML =
-    '<a href="index.html" class="fig-sentry-btn" style="font-family:\'Fraunces\',serif;letter-spacing:-0.02em;font-size:0.75rem;text-transform:none;padding:3px 9px">Fig</a>' +
+    '<button class="fig-sentry-btn" onclick="' + nav + '" style="font-family:\'Fraunces\',serif;letter-spacing:-0.02em;font-size:0.75rem;text-transform:none;padding:3px 9px">Fig</button>' +
     '<button class="fig-sentry-btn" onclick="openFigSettings()">⚙</button>';
   document.body.appendChild(sentry);
 }
@@ -519,8 +564,9 @@ function updateSentry() {
   if (!sentry) return;
   var widDot = ident.worldid && ident.worldid.nullifier_hash ? 'wid' : '';
   var llmDot = llm.provider && llm.key ? 'llm' : '';
+  var nav = (typeof navigateTo === 'function') ? 'navigateTo(\'dashboard\')' : 'window.location.href=\'index.html\'';
   sentry.innerHTML =
-    '<a href="index.html" class="fig-sentry-btn" style="font-family:\'Fraunces\',serif;letter-spacing:-0.02em;font-size:0.75rem;text-transform:none;padding:3px 9px">Fig</a>' +
+    '<button class="fig-sentry-btn" onclick="' + nav + '" style="font-family:\'Fraunces\',serif;letter-spacing:-0.02em;font-size:0.75rem;text-transform:none;padding:3px 9px">Fig</button>' +
     '<button class="fig-sentry-btn" onclick="openFigSettings()">⚙' +
     (widDot || llmDot ? ' <span class="fig-dot-online ' + widDot + '"></span>' : '') +
     '</button>';
@@ -552,6 +598,7 @@ function checkFigLauncher() {
   window.getFigConfig = getFigConfig;
   window.setFigConfig = setFigConfig;
   window.updateSentry = updateSentry;
+  window.navigateTo = window.navigateTo || function(v) { window.location.hash = v; };
 }
 
 // Auto-run on DOMContentLoaded
