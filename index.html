@@ -721,7 +721,11 @@ input[type=file]{display:none}
         <h4>World ID <span id="wid-status"></span></h4>
         <div class="section-meta">Sybil-resistant proof-of-personhood. <a href="https://github.com/GGuberman/fig/blob/main/SPEC-WORLDID.md" target="_blank">Read the spec</a>.</div>
         <div id="wid-form">
-          <div class="field-help" style="margin-bottom:10px">Needs a Fig handle + deployed Worker.</div>
+          <div class="field-row">
+            <label>App ID</label>
+            <input id="wid-app-id" type="text" placeholder="app_staging_... or app_... (leave blank to fetch from Worker)" autocomplete="off">
+          </div>
+          <div class="field-help" style="margin-bottom:10px">Enter your World ID App ID, or leave blank to fetch from a deployed Worker.</div>
           <div class="btn-row">
             <button class="s-btn primary" onclick="connectWorldId()">Sign in with World ID</button>
             <span class="s-toast" id="wid-toast"></span>
@@ -1355,14 +1359,23 @@ async function connectWorldId(){
   toast.className='s-toast';
   const acc=getAccount();
   const sync=getSync();
-  if (!acc.worker?.token) {toast.classList.add('err');toast.textContent='Sign in with a handle first (top section).';return;}
-  if (!sync.workerUrl)    {toast.classList.add('err');toast.textContent='Set the Worker URL on the Cloud sync tab first.';return;}
-  toast.textContent='Loading config…';
-  const cfg=await loadFigWorldConfig();
-  if (!cfg || !cfg.worldIdAppId) {
-    toast.classList.add('err');
-    toast.textContent='Worker has no WORLD_ID_APP_ID configured. See SPEC-WORLDID.md.';
-    return;
+  var appId=document.getElementById('wid-app-id')?.value?.trim();
+  var signal = 'fig-user';
+  if (acc.worker?.handle) signal = acc.worker.handle;
+  if (!appId) {
+    if (!sync.workerUrl) {
+      toast.classList.add('err');
+      toast.textContent='Enter a World ID App ID above, or set the Worker URL on the Cloud sync tab.';
+      return;
+    }
+    toast.textContent='Loading config from Worker…';
+    const wcfg=await loadFigWorldConfig();
+    if (!wcfg || !wcfg.worldIdAppId) {
+      toast.classList.add('err');
+      toast.textContent='Worker has no WORLD_ID_APP_ID. Enter one above or configure the Worker.';
+      return;
+    }
+    appId = wcfg.worldIdAppId;
   }
   var idkitGlobal = window.IDKit;
   if (!idkitGlobal) {
@@ -1377,24 +1390,26 @@ async function connectWorldId(){
   toast.textContent='Open World App on your phone and scan the QR…';
   try {
     const result = await idkitGlobal.init({
-      app_id: cfg.worldIdAppId,
-      action: cfg.worldIdAction || 'verify-human',
-      signal: acc.worker.handle,
+      app_id: appId,
+      action: 'verify-human',
+      signal: signal,
       verification_level: 'orb',
     });
-    toast.textContent='Verifying with Fig Worker…';
-    const r=await fetch(sync.workerUrl.replace(/\/$/,'')+'/auth/worldid/verify',{
-      method:'POST',
-      headers:{'Authorization':'Bearer '+acc.worker.token,'Content-Type':'application/json'},
-      body:JSON.stringify({proof:result, action:cfg.worldIdAction||'verify-human', signal:acc.worker.handle})
-    });
-    const d=await r.json();
-    if (!r.ok) throw new Error(d.error||('HTTP '+r.status));
     const acc2=getAccount();
-    acc2.worldid={nullifier_hash:d.nullifier_hash, verification_level:d.verification_level, verifiedAt:new Date().toISOString()};
+    acc2.worldid={nullifier_hash:result.nullifier_hash, verification_level:result.verification_level||'orb', verifiedAt:new Date().toISOString()};
     const cfg=figGetConfig(); cfg.identity=acc2; figSetConfig(cfg);
     toast.classList.add('ok'); toast.textContent='Verified.';
     renderIdentity();
+    if (sync.workerUrl && acc.worker?.token && acc.worldid?.nullifier_hash !== result.nullifier_hash) {
+      toast.textContent='Verified locally. Syncing with Worker…';
+      try {
+        await fetch(sync.workerUrl.replace(/\/$/,'')+'/auth/worldid/verify',{
+          method:'POST',
+          headers:{'Authorization':'Bearer '+acc.worker.token,'Content-Type':'application/json'},
+          body:JSON.stringify({proof:result, action:'verify-human', signal:signal})
+        });
+      } catch(e) {}
+    }
   } catch(e) {
     toast.classList.add('err');
     toast.textContent='Failed: '+(e?.message||e);

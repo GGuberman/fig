@@ -24,23 +24,17 @@ test.describe('World ID — Settings UI', () => {
     await expect(page.locator('#sec-wid button:has-text("Sign in with World ID")')).toBeEnabled();
   });
 
-  test('refuses to start without a Worker handle', async ({ page }) => {
+  test('refuses to start without an App ID or Worker URL', async ({ page }) => {
     await page.click('#sec-wid button:has-text("Sign in with World ID")');
-    await expect(page.locator('#wid-toast')).toContainText('Sign in with a handle first');
+    await expect(page.locator('#wid-toast')).toContainText('World ID App ID');
   });
 
-  test('refuses to start without a Worker URL configured', async ({ page }) => {
-    // Pretend the user signed in with a Worker handle but never set the Worker URL
-    await page.evaluate(() => {
-      localStorage.setItem('fig_account', JSON.stringify({
-        worker: { handle: 'gg', token: 'fake', createdAt: new Date().toISOString() },
-      }));
-    });
-    // Reopen the modal so renderIdentity sees the new state
-    await page.locator('#settings-modal .modal-close').click();
-    await page.click('button[onclick="openSettings()"]');
+  test('accepts App ID directly without Worker', async ({ page }) => {
+    // Fill in an App ID directly — should pass App ID validation
+    await page.fill('#wid-app-id', 'app_staging_fake');
     await page.click('#sec-wid button:has-text("Sign in with World ID")');
-    await expect(page.locator('#wid-toast')).toContainText('Worker URL');
+    // Should NOT show the "App ID required" error — IDKit failing is expected in test env
+    await expect(page.locator('#wid-toast')).not.toContainText('World ID App ID');
   });
 
   test('connected state renders the verified pill, nullifier, and chip', async ({ page }) => {

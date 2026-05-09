@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>Fig — Sign in</title>
+<script src="fig-shared.js"></script>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{height:100%}
+body{background:#0a0a0f;color:#e8e4f0;font-family:'Inter',-apple-system,BlinkMacSystemFont,sans-serif;display:flex;align-items:center;justify-content:center;padding:20px}
+.login-wrap{width:400px;max-width:100%}
+.logo{font-family:'Fraunces',serif;font-size:2rem;color:#c4aaff;margin-bottom:2px;letter-spacing:-0.02em;text-align:center}
+.tag{font-size:0.58rem;letter-spacing:0.18em;text-transform:uppercase;color:#6b6880;text-align:center;margin-bottom:32px}
+.card{background:#12121a;border:1px solid #252535;border-radius:18px;padding:32px 28px}
+.card h1{font-family:'Fraunces',serif;font-size:1.2rem;margin-bottom:4px}
+.card p{font-size:0.72rem;color:#6b6880;line-height:1.7;margin-bottom:24px}
+.field{margin-bottom:16px}
+.field label{display:block;font-size:0.6rem;letter-spacing:0.1em;text-transform:uppercase;color:#6b6880;margin-bottom:5px}
+.field input{width:100%;background:#1a1a26;border:1px solid #252535;border-radius:8px;padding:10px 12px;color:#e8e4f0;font-family:inherit;font-size:0.78rem;outline:none;transition:border-color 0.15s}
+.field input:focus{border-color:#9b7fe8}
+.btn{display:block;width:100%;padding:11px 0;border-radius:8px;border:none;cursor:pointer;font-family:inherit;font-size:0.72rem;letter-spacing:0.08em;text-transform:uppercase;font-weight:500;transition:opacity 0.15s;text-align:center;text-decoration:none}
+.btn:hover{opacity:0.85}
+.btn.primary{background:#9b7fe8;color:#0a0a0f}
+.btn.ghost{background:transparent;color:#6b6880;border:1px solid #252535;margin-top:10px}
+.toast{font-size:0.65rem;color:#6b6880;margin-top:12px;min-height:1.2em;text-align:center}
+.toast.ok{color:#7ec8a0}
+.toast.err{color:#e07070}
+.divider{display:flex;align-items:center;gap:12px;margin:20px 0;color:#6b6880;font-size:0.6rem;text-transform:uppercase;letter-spacing:0.1em}
+.divider::before,.divider::after{content:'';flex:1;height:1px;background:#252535}
+.worker-section{display:none;margin-top:4px;padding-top:0}
+.worker-section.show{display:block}
+.worker-section .btn{padding:8px 0;font-size:0.65rem;margin-top:6px}
+.worker-section .field{margin-bottom:10px}
+</style>
+</head>
+<body>
+<div class="login-wrap">
+  <div class="logo">Fig</div>
+  <div class="tag">Your own personal wiki</div>
+  <div class="card">
+    <h1>Sign in</h1>
+    <p>Enter your email to sign in, or use a Fig Handle if you have a Worker set up.</p>
+    <div class="field">
+      <label>Email</label>
+      <input id="login-email" type="email" placeholder="you@example.com" autocomplete="email">
+    </div>
+    <div class="field">
+      <label>Password</label>
+      <input id="login-pass" type="password" placeholder="Your password" autocomplete="current-password">
+    </div>
+    <button class="btn primary" onclick="loginEmail()">Sign in →</button>
+    <div class="toast" id="login-toast"></div>
+    <div class="divider">or</div>
+    <button class="btn ghost" onclick="toggleWorkerSection()">Sign in with Fig Handle</button>
+    <div class="worker-section" id="worker-section">
+      <div class="field">
+        <label>Fig Handle</label>
+        <input id="login-handle" type="text" placeholder="e.g. gg" autocomplete="off">
+      </div>
+      <div class="field">
+        <label>Token</label>
+        <input id="login-token" type="password" placeholder="Your token from registration" autocomplete="off">
+      </div>
+      <button class="btn primary" onclick="loginHandle()">Sign in →</button>
+    </div>
+  </div>
+</div>
+<script>
+function getToast(){return document.getElementById('login-toast')}
+
+async function loginEmail(){
+  var email=document.getElementById('login-email').value.trim();
+  var pass=document.getElementById('login-pass').value;
+  var toast=getToast();
+  if(!email||!pass){toast.className='toast err';toast.textContent='Email and password required.';return;}
+  toast.className='toast';toast.textContent='Signing in…';
+  try{
+    var hash=await simpleHash(pass);
+    var existing=localStorage.getItem('fig_login_'+email);
+    if(existing){
+      var d=JSON.parse(existing);
+      if(d.hash!==hash){toast.className='toast err';toast.textContent='Wrong password.';return;}
+    } else {
+      localStorage.setItem('fig_login_'+email,JSON.stringify({hash:hash,createdAt:new Date().toISOString()}));
+    }
+    localStorage.setItem('fig_session',JSON.stringify({email:email,loggedInAt:new Date().toISOString()}));
+    window.location.href='index.html';
+  }catch(e){
+    toast.className='toast err';toast.textContent='Error: '+(e.message||e);
+  }
+}
+
+function loginHandle(){
+  var handle=document.getElementById('login-handle').value.trim();
+  var token=document.getElementById('login-token').value.trim();
+  var toast=getToast();
+  if(!handle||!token){toast.className='toast err';toast.textContent='Handle and token required.';return;}
+  var sync=figGetSync();
+  if(!sync.workerUrl){toast.className='toast err';toast.textContent='Worker URL not configured. Set it in Cloud sync first.';return;}
+  toast.className='toast';toast.textContent='Verifying…';
+  fetch(sync.workerUrl.replace(/\/$/,'')+'/auth/login',{
+    method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({username:handle,token:token})
+  }).then(function(r){return r.json().then(function(d){return{ok:r.ok,data:d};});})
+  .then(function(res){
+    if(!res.ok)throw new Error(res.data.error||'Invalid credentials');
+    var cfg=figGetConfig();
+    if(!cfg.identity)cfg.identity={};
+    cfg.identity.worker={handle:handle,token:token,createdAt:new Date().toISOString()};
+    figSetConfig(cfg);
+    localStorage.setItem('fig_session',JSON.stringify({handle:handle,loggedInAt:new Date().toISOString()}));
+    window.location.href='index.html';
+  }).catch(function(e){
+    toast.className='toast err';toast.textContent='Failed: '+(e.message||e);
+  });
+}
+
+function toggleWorkerSection(){
+  var el=document.getElementById('worker-section');
+  if(el)el.classList.toggle('show');
+}
+
+async function simpleHash(str){
+  try{
+    var buf=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(str));
+    return Array.from(new Uint8Array(buf)).map(function(b){return b.toString(16).padStart(2,'0');}).join('').slice(0,32);
+  }catch(e){
+    var h=0,i;
+    for(i=0;i<str.length;i++){h=((h<<5)-h)+str.charCodeAt(i);h|=0;}
+    return Math.abs(h).toString(16);
+  }
+}
+
+// Check if already logged in
+try{
+  var session=JSON.parse(localStorage.getItem('fig_session')||'null');
+  if(session&&session.loggedInAt)window.location.href='index.html';
+}catch(e){}
+</script>
+</body>
+</html>

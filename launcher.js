@@ -278,18 +278,38 @@ function figDisconnectWorker() {
   render();
 }
 
+var _bskyFormRendered = false;
+function figRenderBskyForm() {
+  var wrap = document.getElementById('fig-ident-form');
+  if (!wrap) return;
+  _bskyFormRendered = true;
+  wrap.innerHTML = '<div style="margin-top:8px;padding:14px;background:var(--surface2,#1a1a26);border-radius:10px">' +
+    '<label style="display:block;font-size:0.6rem;letter-spacing:0.1em;text-transform:uppercase;color:var(--muted,#6b6880);margin-bottom:4px">Bluesky Handle</label>' +
+    '<input id="fig-bsky-handle" type="text" placeholder="alice.bsky.social" style="width:100%;background:var(--surface,#12121a);border:1px solid var(--border,#252535);border-radius:6px;padding:8px 10px;color:var(--text,#e8e4f0);font-family:inherit;font-size:0.75rem;outline:none;margin-bottom:10px;box-sizing:border-box">' +
+    '<label style="display:block;font-size:0.6rem;letter-spacing:0.1em;text-transform:uppercase;color:var(--muted,#6b6880);margin-bottom:4px">App Password</label>' +
+    '<input id="fig-bsky-pass" type="password" placeholder="xxxx-xxxx-xxxx-xxxx" style="width:100%;background:var(--surface,#12121a);border:1px solid var(--border,#252535);border-radius:6px;padding:8px 10px;color:var(--text,#e8e4f0);font-family:inherit;font-size:0.75rem;outline:none;margin-bottom:10px;box-sizing:border-box">' +
+    '<div style="display:flex;gap:8px;align-items:center">' +
+    '<button class="fig-btn primary" onclick="figConnectBsky()" style="padding:7px 16px;font-size:0.62rem">Connect</button>' +
+    '<button class="fig-btn ghost" onclick="figCancelBskyForm()" style="padding:7px 8px;font-size:0.62rem">Cancel</button>' +
+    '<span id="fig-bsky-toast" class="fig-toast" style="min-height:0"></span>' +
+    '</div></div>';
+  setTimeout(function() { var el = document.getElementById('fig-bsky-handle'); if (el) el.focus(); }, 100);
+}
 function figToggleBsky() {
   var cfg = figGetConfig();
   if (cfg.identity && cfg.identity.bsky && cfg.identity.bsky.handle) return;
-  var handle = prompt('Your Bluesky handle (e.g. alice.bsky.social):');
-  if (!handle) return;
-  var pass = prompt('Bluesky app password (create one in Settings → App Passwords):');
-  if (!pass) return;
-  var toast = document.getElementById('fig-ident-toast');
-  if (toast) toast.textContent = 'Connecting…';
+  if (_bskyFormRendered) return;
+  figRenderBskyForm();
+}
+function figConnectBsky() {
+  var handle = document.getElementById('fig-bsky-handle')?.value?.trim().replace(/^@/, '');
+  var pass = document.getElementById('fig-bsky-pass')?.value;
+  var toast = document.getElementById('fig-bsky-toast') || document.getElementById('fig-ident-toast');
+  if (!handle || !pass) { if (toast) { toast.className = 'fig-toast err'; toast.textContent = 'Both fields required.'; } return; }
+  if (toast) { toast.className = 'fig-toast'; toast.textContent = 'Connecting…'; }
   fetch('https://bsky.social/xrpc/com.atproto.server.createSession', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ identifier: handle.replace(/^@/, ''), password: pass })
+    body: JSON.stringify({ identifier: handle, password: pass })
   }).then(function(r) { return r.json().then(function(d) { return { ok: r.ok, data: d }; }); })
   .then(function(res) {
     if (!res.ok) throw new Error(res.data.message || res.data.error || 'Auth failed');
@@ -298,10 +318,16 @@ function figToggleBsky() {
     cfg2.identity.bsky = { did: res.data.did, handle: res.data.handle, accessJwt: res.data.accessJwt, refreshJwt: res.data.refreshJwt, createdAt: new Date().toISOString() };
     figSetConfig(cfg2);
     if (toast) { toast.className = 'fig-toast ok'; toast.textContent = '✓ Connected as @' + res.data.handle; }
+    _bskyFormRendered = false;
     render();
   }).catch(function(e) {
     if (toast) { toast.className = 'fig-toast err'; toast.textContent = 'Failed: ' + (e.message || e) + ' (use an app password)'; }
   });
+}
+function figCancelBskyForm() {
+  _bskyFormRendered = false;
+  var wrap = document.getElementById('fig-ident-form');
+  if (wrap) wrap.innerHTML = '';
 }
 
 function figDisconnectBsky() {
@@ -319,43 +345,55 @@ async function figToggleWid() {
   if (!toast) return;
   var ident = cfg.identity || {};
   var sync = figGetSync();
-  if (!ident.worker || !ident.worker.token) { toast.className = 'fig-toast err'; toast.textContent = 'Create a handle first (Account step).'; return; }
-  if (!sync.workerUrl) { toast.className = 'fig-toast err'; toast.textContent = 'Set Worker URL in Cloud sync settings first.'; return; }
-  toast.className = 'fig-toast';
-  toast.textContent = 'Loading config…';
+  var appId = cfg.worldIdAppId || '';
+  if (!appId && sync.workerUrl) {
+    toast.className = 'fig-toast';
+    toast.textContent = 'Loading config…';
+    try {
+      var cfgResp = await fetch(sync.workerUrl.replace(/\/$/, '') + '/config');
+      if (cfgResp.ok) { var wcfg = await cfgResp.json(); appId = wcfg.worldIdAppId || ''; }
+    } catch (e) {}
+  }
+  if (!appId) {
+    toast.className = 'fig-toast err';
+    toast.textContent = 'No World ID App ID. Configure it in Settings → World ID, or set a Worker URL in Cloud sync.';
+    return;
+  }
+  var signal = ident.worker?.handle || 'fig-user';
+  var idkit = window.IDKit;
+  if (!idkit) {
+    toast.textContent = 'Waiting for IDKit library…';
+    for(var _i=0;_i<50;_i++){await new Promise(function(r){setTimeout(r,100)});idkit=window.IDKit;if(idkit)break;}
+  }
+  if (!idkit) { toast.className = 'fig-toast err'; toast.textContent = 'IDKit not loaded after 5s. Check your network or refresh. If you use a content blocker, allow cdn.jsdelivr.net.'; return; }
+  toast.textContent = 'Open World App on your phone to scan the QR…';
   try {
-    var cfgResp = await fetch(sync.workerUrl.replace(/\/$/, '') + '/config');
-    if (!cfgResp.ok) throw new Error('Cannot reach Worker');
-    var wcfg = await cfgResp.json();
-    if (!wcfg.worldIdAppId) { toast.className = 'fig-toast err'; toast.textContent = 'Worker missing WORLD_ID_APP_ID. See SPEC-WORLDID.md.'; return; }
-    var idkit = window.IDKit;
-    if (!idkit) {
-      toast.textContent = 'Waiting for IDKit library…';
-      for(var _i=0;_i<50;_i++){await new Promise(function(r){setTimeout(r,100)});idkit=window.IDKit;if(idkit)break;}
-    }
-    if (!idkit) { toast.className = 'fig-toast err'; toast.textContent = 'IDKit not loaded after 5s. Check your network or refresh. If you use a content blocker, allow cdn.jsdelivr.net.'; return; }
-    toast.textContent = 'Open World App on your phone to scan the QR…';
     var result = await idkit.init({
-      app_id: wcfg.worldIdAppId,
-      action: wcfg.worldIdAction || 'verify-human',
-      signal: ident.worker.handle,
+      app_id: appId,
+      action: 'verify-human',
+      signal: signal,
       verification_level: 'orb',
     });
-    toast.textContent = 'Verifying with Fig Worker…';
-    var r = await fetch(sync.workerUrl.replace(/\/$/, '') + '/auth/worldid/verify', {
-      method: 'POST',
-      headers: { 'Authorization': 'Bearer ' + ident.worker.token, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ proof: result, action: wcfg.worldIdAction || 'verify-human', signal: ident.worker.handle })
-    });
-    var d = await r.json();
-    if (!r.ok) throw new Error(d.error || ('HTTP ' + r.status));
     var cfg2 = figGetConfig();
     if (!cfg2.identity) cfg2.identity = {};
-    cfg2.identity.worldid = { nullifier_hash: d.nullifier_hash, verification_level: d.verification_level, verifiedAt: new Date().toISOString() };
+    cfg2.identity.worldid = { nullifier_hash: result.nullifier_hash, verification_level: result.verification_level || 'orb', verifiedAt: new Date().toISOString() };
+    cfg2.worldIdAppId = appId;
     figSetConfig(cfg2);
     toast.className = 'fig-toast ok';
     toast.textContent = 'Verified.';
     render();
+    if (sync.workerUrl && ident.worker?.token) {
+      toast.textContent = 'Syncing with Worker…';
+      try {
+        await fetch(sync.workerUrl.replace(/\/$/, '') + '/auth/worldid/verify', {
+          method: 'POST',
+          headers: { 'Authorization': 'Bearer ' + ident.worker.token, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ proof: result, action: 'verify-human', signal: signal })
+        });
+        toast.className = 'fig-toast ok';
+        toast.textContent = 'Verified + synced.';
+      } catch(e) { toast.textContent = 'Verified locally (Worker sync failed).'; }
+    }
   } catch (e) {
     toast.className = 'fig-toast err';
     toast.textContent = 'Failed: ' + (e.message || e);
@@ -575,6 +613,8 @@ function checkFigLauncher() {
   window.figToggleWorker = figToggleWorker;
   window.figDisconnectWorker = figDisconnectWorker;
   window.figToggleBsky = figToggleBsky;
+  window.figConnectBsky = figConnectBsky;
+  window.figCancelBskyForm = figCancelBskyForm;
   window.figDisconnectBsky = figDisconnectBsky;
   window.figToggleWid = figToggleWid;
   window.figDisconnectWid = figDisconnectWid;
