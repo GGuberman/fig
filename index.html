@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Fig</title>
 <script src="https://cdn.jsdelivr.net/npm/@worldcoin/idkit-standalone@1.4.2/build/index.global.js" defer></script>
+<script src="launcher.js"></script>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=Fraunces:opsz,wght,SOFT@9..144,300..600,30..100&display=swap');
 
@@ -185,9 +186,12 @@ footer{padding:20px 32px;border-top:1px solid var(--border);display:flex;justify
 <body>
 
 <div class="top-bar">
-  <div>
-    <div class="wordmark">Fig</div>
-    <div class="wordmark-tag">Your own personal wiki</div>
+  <div style="display:flex;align-items:center;gap:10px">
+    <button class="top-btn" onclick="openFigSettings()" style="padding:4px 8px;font-size:0.75rem;line-height:1" title="Fig settings">⚙</button>
+    <div>
+      <div class="wordmark">Fig</div>
+      <div class="wordmark-tag">Your own personal wiki</div>
+    </div>
   </div>
   <div class="top-actions">
     <span class="auth-chip" id="auth-chip" style="display:none"></span>

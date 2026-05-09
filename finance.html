@@ -200,6 +200,7 @@ input[type=file]{display:none}
 
 <div style="position:fixed;top:12px;left:12px;z-index:999;display:flex;gap:6px">
     <a href="index.html" style="background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:5px 10px;color:var(--accent2);font-family:'Inter',-apple-system,BlinkMacSystemFont,sans-serif;font-size:0.6rem;letter-spacing:0.12em;text-transform:uppercase;text-decoration:none">← Fig</a>
+    <button onclick="openFigSettings()" style="background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:5px 10px;color:var(--muted);font-family:'Inter',-apple-system,BlinkMacSystemFont,sans-serif;font-size:0.6rem;letter-spacing:0.12em;text-transform:uppercase;cursor:pointer">⚙</button>
     <button onclick="figEmergencyReset()" style="background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:5px 10px;color:var(--muted);font-family:'Inter',-apple-system,BlinkMacSystemFont,sans-serif;font-size:0.6rem;letter-spacing:0.12em;text-transform:uppercase;cursor:pointer">Reset</button>
   </div>
   <div id="app-loading" style="display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;color:var(--muted);font-size:0.8rem;letter-spacing:0.1em;gap:14px;padding:0 24px;text-align:center">
@@ -1652,5 +1653,6 @@ init().catch(e => {
 });
 
 </script>
+<script src="launcher.js"></script>
 </body>
 </html>
