@@ -328,8 +328,12 @@ async function figToggleWid() {
     if (!cfgResp.ok) throw new Error('Cannot reach Worker');
     var wcfg = await cfgResp.json();
     if (!wcfg.worldIdAppId) { toast.className = 'fig-toast err'; toast.textContent = 'Worker missing WORLD_ID_APP_ID. See SPEC-WORLDID.md.'; return; }
-    var idkit = window.IDKit || window.IDKitInternal;
-    if (!idkit) { toast.className = 'fig-toast err'; toast.textContent = 'IDKit not loaded. Refresh and try again.'; return; }
+    var idkit = window.IDKit;
+    if (!idkit) {
+      toast.textContent = 'Waiting for IDKit library…';
+      for(var _i=0;_i<50;_i++){await new Promise(function(r){setTimeout(r,100)});idkit=window.IDKit;if(idkit)break;}
+    }
+    if (!idkit) { toast.className = 'fig-toast err'; toast.textContent = 'IDKit not loaded after 5s. Check your network or refresh. If you use a content blocker, allow cdn.jsdelivr.net.'; return; }
     toast.textContent = 'Open World App on your phone to scan the QR…';
     var result = await idkit.init({
       app_id: wcfg.worldIdAppId,

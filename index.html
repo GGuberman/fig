@@ -80,6 +80,11 @@ input[type=date]::-webkit-calendar-picker-indicator{filter:invert(0.5);cursor:po
 .wiki-send{background:var(--accent);border:none;border-radius:8px;color:#0e0e0f;font-family:'Inter',-apple-system,BlinkMacSystemFont,sans-serif;font-size:0.65rem;letter-spacing:0.08em;text-transform:uppercase;padding:8px 16px;cursor:pointer;font-weight:500;transition:opacity 0.15s}
 .wiki-send:hover{opacity:0.85}
 .wiki-send:disabled{opacity:0.4;cursor:not-allowed}
+.wiki-inbox{margin-bottom:14px;display:flex;flex-direction:column;gap:4px;max-height:160px;overflow-y:auto}
+.wiki-inbox-empty{font-size:0.65rem;color:var(--muted);font-style:italic;padding:8px 0}
+.wiki-entry{font-size:0.7rem;color:var(--text);padding:7px 10px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;line-height:1.5;display:flex;gap:8px;align-items:flex-start}
+.wiki-entry-time{font-size:0.55rem;color:var(--muted);white-space:nowrap;padding-top:2px;flex-shrink:0}
+.wiki-entry-text{flex:1;word-break:break-word}
 .wiki-toast{margin-top:10px;font-size:0.65rem;color:var(--green);min-height:1em}
 
 .tracker-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:20px;margin-bottom:24px}
@@ -415,6 +420,7 @@ input[type=file]{display:none}
             </div>
           </div>
         </div>
+        <div class="wiki-inbox" id="wiki-inbox"></div>
         <div class="wiki-input">
           <div class="wiki-input-label">Update your wiki</div>
           <textarea id="wiki-text" placeholder="e.g. Slept 7h, ran 5k. Bought groceries $84. Set a new goal: save $5k by August."></textarea>
@@ -865,6 +871,11 @@ function activateView(view) {
     script.onerror = function() {
       console.error('Failed to load health-bundle.js');
     };
+    script.onload = function() {
+      // health-bundle.js mounts on DOMContentLoaded, which already fired.
+      // Dispatch it to trigger the React mount.
+      document.dispatchEvent(new Event('DOMContentLoaded'));
+    };
     document.body.appendChild(script);
   }
 
@@ -872,29 +883,12 @@ function activateView(view) {
     _financeLoaded = true;
     var s = document.createElement('script');
     s.src = 'finance.js';
-    s.onload = function () {
-      // Give the DOM a tick to render finance templates, then init
-      setTimeout(function() {
-        if (typeof initFinance === 'function') initFinance().catch(function(e) {
-          console.error('Finance init error:', e);
-          var el = document.getElementById('app-loading');
-          if (el) { el.style.display = 'flex'; el.style.color = 'var(--red)'; el.innerHTML = 'Error loading Finance: ' + (e.message||e); }
-        });
-      }, 50);
-    };
     s.onerror = function() {
       console.error('Failed to load finance.js');
       var el = document.getElementById('app-loading');
-      if (el) { el.style.display = 'flex'; el.style.color = 'var(--red)'; el.innerHTML = 'Error loading Finance: script failed to load'; }
+      if (el) { el.style.display = 'flex'; el.style.color = 'var(--red)'; el.innerHTML = 'Error: script failed to load'; }
     };
     document.body.appendChild(s);
-    // Safety timeout: hide loading after 10s regardless
-    setTimeout(function() {
-      var el = document.getElementById('app-loading');
-      if (el && el.style.display !== 'none') {
-        el.style.display = 'none';
-      }
-    }, 10000);
     // Setup file drop handler after DOM is ready
     setTimeout(function() {
       var dropZone = document.getElementById('drop-zone');
@@ -925,7 +919,14 @@ function getHealthData(){
 function getFinanceData(){
   return new Promise(resolve=>{
     try{
-      const req=indexedDB.open('fig_v1',1);
+      const req=indexedDB.open('fig_v1',2);
+      req.onupgradeneeded=e=>{
+        const d=e.target.result;
+        if(!d.objectStoreNames.contains('config'))d.createObjectStore('config');
+        if(!d.objectStoreNames.contains('months'))d.createObjectStore('months');
+        if(!d.objectStoreNames.contains('chat'))d.createObjectStore('chat',{keyPath:'id',autoIncrement:true});
+        if(!d.objectStoreNames.contains('snapshots'))d.createObjectStore('snapshots',{keyPath:'ts'});
+      };
       req.onerror=()=>resolve(null);
       req.onsuccess=e=>{
         const db=e.target.result;
@@ -999,11 +1000,29 @@ function fmtSinceDate(iso){
 }
 function daysBetween(a,b){return Math.round((b-a)/86400000);}
 
+function renderWikiInbox(){
+  const wrap=document.getElementById('wiki-inbox');
+  if(!wrap)return;
+  try{
+    const inbox=JSON.parse(localStorage.getItem('fig_wiki_inbox')||'[]');
+    if(!inbox.length){wrap.innerHTML='<div class="wiki-inbox-empty">No entries yet. Log your first update above.</div>';return;}
+    wrap.innerHTML=inbox.slice(-10).reverse().map(e=>{
+      const d=new Date(e.ts);
+      const h=d.getHours().toString().padStart(2,'0');
+      const m=d.getMinutes().toString().padStart(2,'0');
+      return '<div class="wiki-entry"><span class="wiki-entry-time">'+h+':'+m+'</span><span class="wiki-entry-text">'+esc(e.text)+'</span></div>';
+    }).join('');
+  }catch{wrap.innerHTML='';}
+}
+
+function esc(s){const d=document.createElement('div');d.textContent=s;return d.innerHTML;}
+
 function buildWiki(health, finance){
   const goalsEl=document.getElementById('wiki-goals');
   const summaryEl=document.getElementById('wiki-summary');
   const goals=[];
   let entryCount=0, streak=0, since=null;
+  renderWikiInbox();
   if(health&&health.config){
     const{config,entries=[],habits={}}=health;
     entryCount+=entries.length;
@@ -1137,11 +1156,13 @@ Available health habits: ${JSON.stringify(habits)}`,text,true);
       ta.value='';
       toast.textContent='Saved to inbox (LLM: '+(e.message||e)+')';
       toast.style.color='var(--warn)';
+      renderWikiInbox();
     }
   }else{
     ta.value='';
     toast.textContent='Saved to your wiki inbox. Connect an LLM key in Settings → LLM for auto-routing.';
     toast.style.color='var(--green)';
+    renderWikiInbox();
   }
   setTimeout(()=>{toast.textContent='';},5000);
   scheduleAutoSync();
@@ -1343,10 +1364,14 @@ async function connectWorldId(){
     toast.textContent='Worker has no WORLD_ID_APP_ID configured. See SPEC-WORLDID.md.';
     return;
   }
-  const idkitGlobal = window.IDKit || window.IDKitInternal;
+  var idkitGlobal = window.IDKit;
+  if (!idkitGlobal) {
+    toast.textContent='Waiting for IDKit library…';
+    for(var _i=0;_i<50;_i++){await new Promise(function(r){setTimeout(r,100)});idkitGlobal=window.IDKit;if(idkitGlobal)break;}
+  }
   if (!idkitGlobal) {
     toast.classList.add('err');
-    toast.textContent='IDKit didn\'t load. Check your network or refresh.';
+    toast.textContent='IDKit didn\'t load after 5s. Check your network or refresh. If you use a content blocker, allow cdn.jsdelivr.net.';
     return;
   }
   toast.textContent='Open World App on your phone and scan the QR…';

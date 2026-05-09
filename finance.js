@@ -1,7 +1,7 @@
 'use strict';
 
 const DB_NAME = 'fig_v1';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 let db = null;
 let charts = {};
 let dashConfig = null;
@@ -18,7 +18,7 @@ let obState = {
 let obSteps = ['intro','q1','q2','q3','q4','q5','q6','api','profile','confirm'];
 let obCurrentIdx = 0;
 
-const PROVIDERS = {
+const FINANCE_PROVIDERS = {
   anthropic: { label:'Claude (Anthropic)', placeholder:'sk-ant-...', baseUrl:'https://api.anthropic.com' },
   openai:    { label:'ChatGPT (OpenAI)',   placeholder:'sk-...',     baseUrl:'https://api.openai.com/v1' },
   gemini:    { label:'Gemini (Google)',    placeholder:'AIza...',    baseUrl:'https://generativelanguage.googleapis.com' },
@@ -30,10 +30,9 @@ const LS = {
   set: (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} },
 };
 
-const THEME_KEY = 'fig_theme_v1';
 (function applySavedTheme(){
   try {
-    const raw = localStorage.getItem(THEME_KEY);
+    const raw = localStorage.getItem('fig_theme_v1');
     if (!raw) return;
     const t = JSON.parse(raw);
     const r = document.documentElement;
@@ -127,7 +126,7 @@ async function callLLM(systemPrompt, userMessage, expectJSON = false) {
     if (d.error) throw new Error(d.error.message);
     content = d.content?.[0]?.text || '';
   } else if (provider === 'openai' || provider === 'deepseek') {
-    const base = PROVIDERS[provider].baseUrl;
+    const base = FINANCE_PROVIDERS[provider].baseUrl;
     const model = provider === 'deepseek' ? 'deepseek-chat' : 'gpt-4o-mini';
     const res = await fetch(`${base}/chat/completions`, {
       method:'POST', headers:{'Content-Type':'application/json','Authorization':`Bearer ${key}`},
@@ -296,9 +295,9 @@ function renderAPIStep() {
       <div class="api-setup-title">API Key</div>
       <div class="api-row">
         <select class="api-select" id="ob-provider" onchange="updateProviderPlaceholder()">
-          ${Object.entries(PROVIDERS).map(([k,v])=>`<option value="${k}" ${savedProvider===k?'selected':''}>${v.label}</option>`).join('')}
+          ${Object.entries(FINANCE_PROVIDERS).map(([k,v])=>`<option value="${k}" ${savedProvider===k?'selected':''}>${v.label}</option>`).join('')}
         </select>
-        <input class="api-key-input" type="password" id="ob-key" placeholder="${PROVIDERS[savedProvider].placeholder}" value="${savedKey}">
+        <input class="api-key-input" type="password" id="ob-key" placeholder="${FINANCE_PROVIDERS[savedProvider].placeholder}" value="${savedKey}">
       </div>
       <div style="font-size:0.63rem;color:var(--muted);line-height:1.7">Your key is sent directly to the AI provider from your browser. Fig never sees it.</div>
     </div>
@@ -567,7 +566,7 @@ function retreatOB() {
 
 function updateProviderPlaceholder() {
   const p = document.getElementById('ob-provider')?.value;
-  if (p && PROVIDERS[p]) document.getElementById('ob-key').placeholder = PROVIDERS[p].placeholder;
+  if (p && FINANCE_PROVIDERS[p]) document.getElementById('ob-key').placeholder = FINANCE_PROVIDERS[p].placeholder;
 }
 
 function saveAPIStep() {
@@ -1136,7 +1135,7 @@ async function initFinance() {
     document.getElementById('passcode-screen').style.display = 'block';
     document.getElementById('pc-input').focus();
   } else {
-    showOnboardingOrDashboard();
+    await showOnboardingOrDashboard();
   }
   const now = new Date();
   const monthEl = document.getElementById('upload-month');
@@ -1178,6 +1177,23 @@ async function saveManual() {
 
 window.handleFile = handleFile;
 window.initFinance = initFinance;
+
+// Auto-initialize on load
+if (document.readyState === 'complete' || document.readyState === 'interactive') {
+  initFinance().catch(function(e) {
+    console.error('Finance auto-init error:', e.message || e);
+    var el = document.getElementById('app-loading');
+    if (el) { el.style.display = 'flex'; el.style.color = 'var(--red)'; el.innerHTML = 'Error: ' + (e.message||e); }
+  });
+} else {
+  document.addEventListener('DOMContentLoaded', function() {
+    initFinance().catch(function(e) {
+      console.error('Finance auto-init error:', e.message || e);
+      var el = document.getElementById('app-loading');
+      if (el) { el.style.display = 'flex'; el.style.color = 'var(--red)'; el.innerHTML = 'Error: ' + (e.message||e); }
+    });
+  });
+}
 window.figEmergencyReset = resetApp;
 window.selectChoice = selectChoice;
 window.selectTemplate = selectTemplate;
