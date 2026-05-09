@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Fig</title>
+<script src="https://cdn.jsdelivr.net/npm/@worldcoin/idkit-standalone@1.4.2/build/index.global.js" defer></script>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=Fraunces:opsz,wght,SOFT@9..144,300..600,30..100&display=swap');
 
@@ -378,9 +379,24 @@ footer{padding:20px 32px;border-top:1px solid var(--border);display:flex;justify
       </div>
 
       <div class="settings-section" id="sec-wid">
-        <h4>World ID <span class="coming-pill">Coming soon</span></h4>
-        <div class="section-meta">Sybil-resistant proof-of-personhood. Pairs with AgentKit so insurers and public programs can fund rebates for verified-good-behavior streaks — without Fig touching your bank credentials. <a href="https://github.com/GGuberman/fig/blob/main/ROADMAP.md" target="_blank">Read the thesis</a>.</div>
-        <button class="s-btn" disabled>Sign in with World ID (preview shipping next session)</button>
+        <h4>World ID <span id="wid-status"></span></h4>
+        <div class="section-meta">Sybil-resistant proof-of-personhood. Verifying once unlocks signed attestations on the Cloud sync tab — partners (insurers, public programs, employers) can read those attestations to fund rebates for verified-good-behavior streaks, without Fig ever exposing your raw data. <a href="https://github.com/GGuberman/fig/blob/main/SPEC-WORLDID.md" target="_blank">Read the spec</a>.</div>
+        <div id="wid-form">
+          <div class="field-help" style="margin-bottom:10px">Needs a Fig handle from the section above and a deployed Worker on the Cloud sync tab. You'll be asked to scan a QR code with your World App.</div>
+          <div class="btn-row">
+            <button class="s-btn primary" onclick="connectWorldId()">Sign in with World ID</button>
+            <span class="s-toast" id="wid-toast"></span>
+          </div>
+        </div>
+        <div id="wid-connected" style="display:none">
+          <div class="field-help">Verified as <b id="wid-level-display"></b>. Nullifier <code id="wid-nullifier-display" style="font-size:0.62rem;color:var(--muted)"></code><br><a href="#" onclick="copyAttestationsLink();return false;">Copy public attestations URL</a> · <a href="#" onclick="disconnectWorldId();return false;">Disconnect</a></div>
+          <div class="btn-row" style="margin-top:14px">
+            <button class="s-btn" onclick="mintTestAttestation()">Mint a sample attestation</button>
+            <button class="s-btn" onclick="loadAttestationList()">Refresh attestation list</button>
+            <span class="s-toast" id="attest-toast"></span>
+          </div>
+          <div id="attest-list" style="margin-top:14px;font-size:0.7rem;color:var(--muted);line-height:1.7"></div>
+        </div>
       </div>
     </div>
 
@@ -762,6 +778,16 @@ function renderIdentity(){
   document.getElementById('sec-bsky').classList.toggle('connected',!!bConnected);
   document.getElementById('bsky-status').innerHTML = bConnected?'<span class="connected-pill">connected</span>':'';
   if (bConnected) document.getElementById('bsky-handle-display').textContent = acc.bsky.handle;
+  // World ID
+  const widConnected = acc.worldid && acc.worldid.nullifier_hash;
+  document.getElementById('wid-form').style.display      = widConnected?'none':'';
+  document.getElementById('wid-connected').style.display = widConnected?'':'none';
+  document.getElementById('sec-wid').classList.toggle('connected',!!widConnected);
+  document.getElementById('wid-status').innerHTML = widConnected?'<span class="connected-pill">verified ('+(acc.worldid.verification_level||'human')+')</span>':'';
+  if (widConnected) {
+    document.getElementById('wid-level-display').textContent = acc.worldid.verification_level || 'verified human';
+    document.getElementById('wid-nullifier-display').textContent = acc.worldid.nullifier_hash.slice(0,18)+'…'+acc.worldid.nullifier_hash.slice(-6);
+  }
 
   renderAuthChip();
 }
@@ -769,12 +795,13 @@ function renderIdentity(){
 function renderAuthChip(){
   const acc=getAccount();
   const chip=document.getElementById('auth-chip');
+  const verified = acc.worldid?.nullifier_hash ? `<span title="World ID verified" style="color:var(--green);margin-left:4px">✓</span>` : '';
   if (acc.worker?.handle) {
     chip.style.display='flex';
-    chip.innerHTML=`<span class="dot"></span><b>${acc.worker.handle}</b>`;
+    chip.innerHTML=`<span class="dot"></span><b>${acc.worker.handle}</b>${verified}`;
   } else if (acc.bsky?.handle) {
     chip.style.display='flex';
-    chip.innerHTML=`<span class="dot"></span><b>@${acc.bsky.handle}</b>`;
+    chip.innerHTML=`<span class="dot"></span><b>@${acc.bsky.handle}</b>${verified}`;
   } else {
     chip.style.display='none';
   }
@@ -860,6 +887,141 @@ async function connectBluesky(){
 function disconnectBluesky(){
   if (!confirm('Disconnect Bluesky? Tokens will be cleared from this device.')) return;
   const acc=getAccount(); delete acc.bsky; lsSet(ACCOUNT_KEY,acc); renderIdentity();
+}
+
+// ── World ID ──────────────────────────────────────────────────
+let _figWorldConfig = null;
+async function loadFigWorldConfig(){
+  if (_figWorldConfig) return _figWorldConfig;
+  const s=getSync();
+  if (!s.workerUrl) return null;
+  try {
+    const r=await fetch(s.workerUrl.replace(/\/$/,'')+'/config');
+    if (!r.ok) return null;
+    _figWorldConfig=await r.json();
+    return _figWorldConfig;
+  } catch { return null; }
+}
+
+async function connectWorldId(){
+  const toast=document.getElementById('wid-toast');
+  toast.className='s-toast';
+  const acc=getAccount();
+  const sync=getSync();
+  if (!acc.worker?.token) {toast.classList.add('err');toast.textContent='Sign in with a handle first (top section).';return;}
+  if (!sync.workerUrl)    {toast.classList.add('err');toast.textContent='Set the Worker URL on the Cloud sync tab first.';return;}
+
+  toast.textContent='Loading config…';
+  const cfg=await loadFigWorldConfig();
+  if (!cfg || !cfg.worldIdAppId) {
+    toast.classList.add('err');
+    toast.textContent='Worker has no WORLD_ID_APP_ID configured. See SPEC-WORLDID.md.';
+    return;
+  }
+
+  const idkitGlobal = window.IDKit || window.IDKitInternal;
+  if (!idkitGlobal) {
+    toast.classList.add('err');
+    toast.textContent='IDKit didn\'t load. Check your network or refresh.';
+    return;
+  }
+
+  toast.textContent='Open World App on your phone and scan the QR…';
+  try {
+    // The standalone IDKit exposes a Promise-based open() API.
+    const result = await idkitGlobal.init({
+      app_id: cfg.worldIdAppId,
+      action: cfg.worldIdAction || 'verify-human',
+      signal: acc.worker.handle, // bind proof to this Fig handle
+      verification_level: 'orb',
+    }).then(()=>idkitGlobal.open());
+
+    // Send proof to Worker for ZK verification + nullifier binding
+    toast.textContent='Verifying with Fig Worker…';
+    const r=await fetch(sync.workerUrl.replace(/\/$/,'')+'/auth/worldid/verify',{
+      method:'POST',
+      headers:{'Authorization':'Bearer '+acc.worker.token,'Content-Type':'application/json'},
+      body:JSON.stringify({proof:result, action:cfg.worldIdAction||'verify-human', signal:acc.worker.handle})
+    });
+    const d=await r.json();
+    if (!r.ok) throw new Error(d.error||('HTTP '+r.status));
+
+    const acc2=getAccount();
+    acc2.worldid={nullifier_hash:d.nullifier_hash, verification_level:d.verification_level, verifiedAt:new Date().toISOString()};
+    lsSet(ACCOUNT_KEY,acc2);
+    toast.classList.add('ok'); toast.textContent='Verified.';
+    renderIdentity();
+  } catch(e) {
+    toast.classList.add('err');
+    toast.textContent='Failed: '+(e?.message||e);
+  }
+}
+
+function disconnectWorldId(){
+  if (!confirm('Disconnect World ID from this device? Your verification on the Worker is unchanged — re-link any time by signing in with the same World App.')) return;
+  const acc=getAccount(); delete acc.worldid; lsSet(ACCOUNT_KEY,acc); renderIdentity();
+}
+
+function copyAttestationsLink(){
+  const acc=getAccount(); const sync=getSync();
+  if (!acc.worldid?.nullifier_hash || !sync.workerUrl) return;
+  const url=sync.workerUrl.replace(/\/$/,'')+'/attestations/'+acc.worldid.nullifier_hash;
+  navigator.clipboard.writeText(url).then(()=>{
+    const t=document.getElementById('wid-toast');t.className='s-toast ok';t.textContent='Copied: '+url;
+    setTimeout(()=>{t.textContent='';},5000);
+  });
+}
+
+async function mintTestAttestation(){
+  const t=document.getElementById('attest-toast'); t.className='s-toast'; t.textContent='Minting…';
+  const today=new Date().toISOString().slice(0,10);
+  const r=await publishAttestation('demo.fig.beta', 1, today, today);
+  if (r.ok) {
+    t.classList.add('ok'); t.textContent='Minted: '+r.attestation.kind;
+    loadAttestationList();
+  } else {
+    t.classList.add('err'); t.textContent='Failed: '+r.error;
+  }
+}
+
+async function loadAttestationList(){
+  const acc=getAccount(); const sync=getSync();
+  const wrap=document.getElementById('attest-list');
+  if (!acc.worldid?.nullifier_hash || !sync.workerUrl) {
+    wrap.textContent='Connect Worker URL + World ID first.'; return;
+  }
+  wrap.textContent='Loading…';
+  try {
+    const r=await fetch(sync.workerUrl.replace(/\/$/,'')+'/attestations/'+acc.worldid.nullifier_hash);
+    const d=await r.json();
+    if (!r.ok) throw new Error('HTTP '+r.status);
+    if (!d.attestations?.length) { wrap.innerHTML='<i>No attestations yet — mint one above to test the pipeline.</i>'; return; }
+    wrap.innerHTML='<b style="color:var(--accent2)">'+d.attestations.length+' attestation'+(d.attestations.length===1?'':'s')+'</b><br>' + d.attestations.map(a=>`
+      <div style="margin-top:6px;padding:8px 10px;background:var(--surface2);border-radius:6px">
+        <code style="color:var(--accent2)">${a.kind}</code> · ${new Date(a.issued_at).toLocaleString()}<br>
+        <span style="font-size:0.6rem">sig <code>${a.signature.slice(0,16)}…${a.signature.slice(-8)}</code></span>
+      </div>`).join('');
+  } catch(e) { wrap.textContent='Failed to load: '+(e?.message||e); }
+}
+
+// Issue an attestation on demand. Used by the streak engine and from the Cloud sync tab.
+async function publishAttestation(kind, value, periodStart, periodEnd){
+  const acc=getAccount(); const sync=getSync();
+  if (!acc.worker?.token || !sync.workerUrl || !acc.worldid?.nullifier_hash) {
+    return {ok:false, error:'Need Worker handle + Worker URL + World ID verification'};
+  }
+  try {
+    const r=await fetch(sync.workerUrl.replace(/\/$/,'')+'/attestations',{
+      method:'POST',
+      headers:{'Authorization':'Bearer '+acc.worker.token,'Content-Type':'application/json'},
+      body:JSON.stringify({kind, value, period_start:periodStart, period_end:periodEnd})
+    });
+    const d=await r.json();
+    if (!r.ok) return {ok:false, error:d.error||('HTTP '+r.status)};
+    return {ok:true, attestation:d.attestation, public_url:d.public_url};
+  } catch(e) {
+    return {ok:false, error:e?.message||String(e)};
+  }
 }
 
 // ── LLM rendering ──

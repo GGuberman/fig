@@ -51,6 +51,36 @@ export default {
       return new Response(null, { headers: CORS });
     }
 
+    // ── GET /config ──────────────────────────────────────
+    // Public, unauthenticated. Lets the static frontend learn the WORLD_ID_APP_ID
+    // without baking it into the HTML.
+    if (path === "/config" && request.method === "GET") {
+      return json({
+        worldIdAppId: env.WORLD_ID_APP_ID || null,
+        worldIdAction: "verify-human",
+      });
+    }
+
+    // ── GET /attestations/:nullifier ─────────────────────
+    // PUBLIC read of all attestations for a verified human, keyed by World ID nullifier.
+    // No auth: this is the whole point — a partner reads attestations to gate rebates,
+    // the user controls disclosure by sharing the URL.
+    if (path.startsWith("/attestations/") && request.method === "GET") {
+      const nullifier = path.split("/")[2];
+      if (!nullifier || !/^0x[a-fA-F0-9]{40,}$/.test(nullifier)) {
+        return err("Invalid nullifier_hash");
+      }
+      const list = await env.TRACKER_KV.list({ prefix: `attest:${nullifier}:` });
+      const records = await Promise.all(
+        list.keys.map((k) => env.TRACKER_KV.get(k.name).then((v) => (v ? JSON.parse(v) : null)))
+      );
+      return json({
+        nullifier_hash: nullifier,
+        attestations: records.filter(Boolean),
+        signer: "worker:hmac-sha256-v1",
+      });
+    }
+
     // ── POST /auth/register ──────────────────────────────
     // Body: { username }
     // Creates account if username not taken, returns token
@@ -132,9 +162,139 @@ export default {
     if (path === "/account" && request.method === "DELETE") {
       await env.TRACKER_KV.delete(`user:${username}`);
       await env.TRACKER_KV.delete(`data:${username}`);
+      // Best-effort: also clear reverse-index of any World ID claim by this user
+      const userData = JSON.parse((await env.TRACKER_KV.get(`data:${username}`)) || "null") || {};
+      if (userData?.worldid?.nullifier_hash) {
+        await env.TRACKER_KV.delete(`worldid:${userData.worldid.nullifier_hash}`);
+      }
       return json({ ok: true });
+    }
+
+    // ── POST /auth/worldid/verify ────────────────────────
+    // Body: { proof, action, signal }   (proof comes from IDKit on the client)
+    // Verifies the proof against Worldcoin, stores nullifier ↔ user binding.
+    if (path === "/auth/worldid/verify" && request.method === "POST") {
+      if (!env.WORLD_ID_APP_ID) {
+        return err("Worker missing WORLD_ID_APP_ID secret. Run `wrangler secret put WORLD_ID_APP_ID`.", 500);
+      }
+      const { proof, action = "verify-human", signal = "" } = await request.json();
+      if (!proof || !proof.nullifier_hash || !proof.merkle_root || !proof.proof) {
+        return err("Malformed proof — expected {nullifier_hash, merkle_root, proof, verification_level}");
+      }
+
+      // Forward to Worldcoin for ZK verification
+      const verifyResp = await fetch(
+        `https://developer.worldcoin.org/api/v2/verify/${env.WORLD_ID_APP_ID}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            nullifier_hash: proof.nullifier_hash,
+            merkle_root: proof.merkle_root,
+            proof: proof.proof,
+            verification_level: proof.verification_level,
+            action,
+            signal,
+          }),
+        }
+      );
+      const verifyData = await verifyResp.json().catch(() => ({}));
+      if (!verifyResp.ok || verifyData.success === false) {
+        return err(verifyData.detail || `Worldcoin verify failed (${verifyResp.status})`, 400);
+      }
+
+      // Sybil check: if this nullifier is already bound to a different Fig handle, reject.
+      const existing = await env.TRACKER_KV.get(`worldid:${proof.nullifier_hash}`);
+      if (existing && existing !== username) {
+        return err("This World ID is already bound to another Fig handle. Sign in there or contact support.", 409);
+      }
+
+      // Bind: store on user data + reverse-index nullifier → handle.
+      const dataRaw = await env.TRACKER_KV.get(`data:${username}`);
+      const data = dataRaw ? JSON.parse(dataRaw) : {};
+      const userData = data && typeof data === "object" ? data : {};
+      userData.worldid = {
+        nullifier_hash: proof.nullifier_hash,
+        verification_level: proof.verification_level,
+        action,
+        verifiedAt: new Date().toISOString(),
+      };
+      await env.TRACKER_KV.put(`data:${username}`, JSON.stringify(userData));
+      await env.TRACKER_KV.put(`worldid:${proof.nullifier_hash}`, username);
+
+      return json({
+        ok: true,
+        nullifier_hash: proof.nullifier_hash,
+        verification_level: proof.verification_level,
+      });
+    }
+
+    // ── POST /attestations ───────────────────────────────
+    // Body: { kind, value, period_start, period_end }
+    // Issues an HMAC-signed attestation tied to the user's World ID nullifier.
+    if (path === "/attestations" && request.method === "POST") {
+      if (!env.ATTEST_KEY) {
+        return err("Worker missing ATTEST_KEY secret. Run `wrangler secret put ATTEST_KEY`.", 500);
+      }
+      const dataRaw = await env.TRACKER_KV.get(`data:${username}`);
+      const userData = dataRaw ? JSON.parse(dataRaw) : null;
+      const nullifier = userData?.worldid?.nullifier_hash;
+      if (!nullifier) {
+        return err("Sign in with World ID before publishing attestations.", 412);
+      }
+
+      const body = await request.json();
+      const { kind, value = null, period_start = null, period_end = null } = body || {};
+      if (!kind || typeof kind !== "string" || kind.length > 64) {
+        return err("Each attestation needs a `kind` string (≤64 chars), e.g. streak.savings.30d");
+      }
+
+      const record = {
+        nullifier_hash: nullifier,
+        verification_level: userData.worldid.verification_level,
+        kind,
+        value,
+        period_start,
+        period_end,
+        issued_at: new Date().toISOString(),
+        issuer: "fig-worker-v1",
+      };
+
+      // HMAC-SHA256 over a canonical JSON of the record (sans signature).
+      const canonical = JSON.stringify(record);
+      const sig = await hmacSign(env.ATTEST_KEY, canonical);
+      record.signature = sig;
+      record.canonical_payload = canonical;
+
+      const key = `attest:${nullifier}:${kind}:${record.issued_at}`;
+      await env.TRACKER_KV.put(key, JSON.stringify(record));
+
+      return json({ ok: true, attestation: record, public_url: `${url.origin}/attestations/${nullifier}` });
     }
 
     return err("Not found", 404);
   },
 };
+
+// ── HMAC helpers ────────────────────────────────────────
+async function hmacSign(secretHex, message) {
+  const keyBytes = hexToBytes(secretHex);
+  const key = await crypto.subtle.importKey(
+    "raw",
+    keyBytes,
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"]
+  );
+  const sig = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(message));
+  return bytesToHex(new Uint8Array(sig));
+}
+function hexToBytes(hex) {
+  const clean = hex.replace(/^0x/, "");
+  const out = new Uint8Array(clean.length / 2);
+  for (let i = 0; i < out.length; i++) out[i] = parseInt(clean.substr(i * 2, 2), 16);
+  return out;
+}
+function bytesToHex(bytes) {
+  return Array.from(bytes).map((b) => b.toString(16).padStart(2, "0")).join("");
+}
