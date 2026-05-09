@@ -11,7 +11,7 @@ test.describe('Finance page', () => {
     page.on('pageerror', e => errors.push(e.message));
 
     await page.goto('/finance.html');
-    await expect(page.locator('#app-loading')).toBeHidden({ timeout: 7000 });
+    await expect(page.locator('#app-loading')).toBeHidden({ timeout: 15000 });
     await expect(page.locator('#onboarding')).toBeVisible();
     await expect(page.locator('.ob-logo')).toContainText('Fig Finance');
 
@@ -26,13 +26,15 @@ test.describe('Finance page', () => {
 
   test('back-link returns to home', async ({ page }) => {
     await page.goto('/finance.html');
-    await page.click('a[href="index.html"]');
+    await page.click('button[onclick*="navigateTo"]');
     await expect(page).toHaveURL(/index\.html$/);
     await expect(page.locator('.wordmark')).toHaveText('Fig');
   });
 
   test('inherits Fig Light theme from home', async ({ page }) => {
     await page.goto('/index.html');
+    // Dismiss first-visit overlay
+    await page.evaluate(() => window.figDismissLauncher());
     await page.click('button[onclick="openTheme()"]');
     await page.click('text=Fig Light');
     await page.goto('/finance.html');

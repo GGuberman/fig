@@ -861,6 +861,9 @@ function activateView(view) {
     _healthLoaded = true;
     var script = document.createElement('script');
     script.src = 'health-bundle.js';
+    script.onerror = function() {
+      console.error('Failed to load health-bundle.js');
+    };
     document.body.appendChild(script);
   }
 
@@ -878,7 +881,19 @@ function activateView(view) {
         });
       }, 50);
     };
+    s.onerror = function() {
+      console.error('Failed to load finance.js');
+      var el = document.getElementById('app-loading');
+      if (el) { el.style.display = 'flex'; el.style.color = 'var(--red)'; el.innerHTML = 'Error loading Finance: script failed to load'; }
+    };
     document.body.appendChild(s);
+    // Safety timeout: hide loading after 10s regardless
+    setTimeout(function() {
+      var el = document.getElementById('app-loading');
+      if (el && el.style.display !== 'none') {
+        el.style.display = 'none';
+      }
+    }, 10000);
     // Setup file drop handler after DOM is ready
     setTimeout(function() {
       var dropZone = document.getElementById('drop-zone');

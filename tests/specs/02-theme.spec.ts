@@ -10,6 +10,8 @@ test.describe('Theme switcher', () => {
     // re-fires on every reload/navigation and would wipe the theme we just set
     // mid-test.
     await page.goto('/index.html');
+    // Dismiss first-visit overlay
+    await page.evaluate(() => window.figDismissLauncher());
   });
 
   test('opens and closes the modal', async ({ page }) => {

@@ -19,7 +19,7 @@ test.describe('Home page', () => {
     await expect(page.locator('.wiki-card')).toBeVisible();
     await expect(page.locator('.tracker-card')).toHaveCount(3);
     await expect(page.locator('.earn-section')).toBeVisible();
-    await expect(page.locator('footer')).toBeVisible();
+    await expect(page.locator('.dash-footer')).toBeVisible();
 
     // No JS exceptions during init
     await page.waitForTimeout(500);

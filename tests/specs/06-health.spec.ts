@@ -18,7 +18,7 @@ test.describe('Health page', () => {
 
   test('back link present', async ({ page }) => {
     await page.goto('/health.html');
-    await expect(page.locator('a[href="index.html"]')).toContainText('Fig');
+    await expect(page.locator('button[onclick*="navigateTo"]').first()).toContainText('Fig');
   });
 
   test('uses the new font stack (no Georgia / DM Mono)', async ({ page }) => {

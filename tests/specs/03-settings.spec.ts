@@ -5,6 +5,8 @@ test.describe('Settings modal', () => {
     // Fresh context starts with empty storage; no need for an init-script clearer
     // (which re-fires on every navigation and would wipe state set mid-test).
     await page.goto('/index.html');
+    // Dismiss first-visit overlay
+    await page.evaluate(() => window.figDismissLauncher());
     await page.click('button[onclick="openSettings()"]');
     await expect(page.locator('#settings-modal')).toHaveClass(/open/);
   });

@@ -4,6 +4,8 @@ test.describe('Wiki input', () => {
   test.beforeEach(async ({ page }) => {
     await page.addInitScript(() => localStorage.clear());
     await page.goto('/index.html');
+    // Dismiss first-visit overlay
+    await page.evaluate(() => window.figDismissLauncher());
   });
 
   test('saves an entry to the inbox', async ({ page }) => {
