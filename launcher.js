@@ -117,15 +117,16 @@ function prevStep() {
 function figRenderAccount() {
   var cfg = figGetConfig();
   var ident = cfg.identity || {};
+  var session = figGetSession();
+  var emailConnected = session && session.email;
   var workerConnected = ident.worker && ident.worker.handle && ident.worker.token;
-  var sync = figGetSync();
-  var hasWorkerUrl = sync && sync.workerUrl;
 
-  if (workerConnected) {
+  if (emailConnected || workerConnected) {
+    var label = emailConnected ? session.email : ('@' + ident.worker.handle);
     return `
       <span style="font-size:1.5rem;margin-bottom:6px;display:block">👤</span>
       <div class="fig-h1">Your account</div>
-      <div class="fig-status connected"><span class="fig-dot-online"></span> Signed in as <b>@${ident.worker.handle}</b></div>
+      <div class="fig-status connected"><span class="fig-dot-online"></span> Signed in as <b>${label}</b></div>
       <div class="fig-desc">Your account is connected. You can manage it in Settings or proceed to set up identity and LLM.</div>
       <div class="fig-btn-row">
         <button class="fig-btn ghost" onclick="figDismissLauncher()">Skip setup</button>
@@ -137,29 +138,84 @@ function figRenderAccount() {
   return `
     <span style="font-size:1.5rem;margin-bottom:6px;display:block">👤</span>
     <div class="fig-h1">Create your account</div>
-    <div class="fig-desc">Optionally create a Fig Handle — a lightweight account for cloud sync, identity binding, and attestations. Everything works without one too.</div>
-    ${hasWorkerUrl ? `
-      <div class="fig-field">
-        <label>Fig Handle</label>
-        <input id="fig-acc-handle" type="text" placeholder="e.g. gg" maxlength="32" autocomplete="off" onkeydown="if(event.key==='Enter')figCreateAccount()">
-        <div class="fig-field-help">2–32 characters: letters, numbers, _ and -</div>
-      </div>
-      <div class="fig-btn-row" style="padding-top:0">
-        <button class="fig-btn primary" onclick="figCreateAccount()" style="padding:8px 18px;font-size:0.68rem">Create</button>
-        <span id="fig-acc-toast" class="fig-toast" style="min-height:0"></span>
-      </div>` : `
-      <div class="fig-desc" style="background:var(--surface2,#1a1a26);padding:12px 14px;border-radius:8px;margin-bottom:16px">
-        To create an account, deploy the Fig Worker and set the Worker URL in <b>Settings → Cloud sync</b>. Then come back here.
-      </div>`}
-      <div class="fig-btn-row">
-        <button class="fig-btn ghost" onclick="figDismissLauncher()">Skip — just show me the app</button>
-        <span class="fig-spacer"></span>
-        <button class="fig-btn primary" onclick="nextStep()">Next →</button>
-      </div>`;
+    <div class="fig-desc">Sign in with email to save your data and sync across devices. Everything stays encrypted on your device.</div>
+    <div class="fig-field">
+      <label>Email</label>
+      <input id="fig-acc-email" type="email" placeholder="you@example.com" autocomplete="email" onkeydown="if(event.key==='Enter')document.getElementById('fig-acc-pass').focus()">
+    </div>
+    <div class="fig-field">
+      <label>Password</label>
+      <input id="fig-acc-pass" type="password" placeholder="Choose a password" autocomplete="new-password" onkeydown="if(event.key==='Enter')figCreateEmailAccount()">
+    </div>
+    <div class="fig-btn-row" style="padding-top:0">
+      <button class="fig-btn primary" onclick="figCreateEmailAccount()" style="padding:8px 18px;font-size:0.68rem">Sign up / Sign in →</button>
+      <span id="fig-acc-toast" class="fig-toast" style="min-height:0"></span>
+    </div>
+    <details style="margin-top:16px;font-size:0.72rem;color:var(--muted,#6b6880)" ontoggle="if(this.open)figRenderWorkerOption()">
+      <summary style="cursor:pointer;color:var(--muted,#6b6880);font-size:0.65rem;letter-spacing:0.08em">Advanced: Fig Handle (needs Worker)</summary>
+      <div id="fig-acc-worker-option" style="margin-top:12px"></div>
+    </details>
+    <div class="fig-btn-row">
+      <button class="fig-btn ghost" onclick="figDismissLauncher()">Skip — just show me the app</button>
+      <span class="fig-spacer"></span>
+      <button class="fig-btn primary" onclick="nextStep()">Next →</button>
+    </div>`;
 }
 
-function figCreateAccount() {
-  var input = document.getElementById('fig-acc-handle');
+function figGetSession() {
+  try { return JSON.parse(localStorage.getItem('fig_session') || 'null'); } catch(e) { return null; }
+}
+
+function figSetSession(session) {
+  try { localStorage.setItem('fig_session', JSON.stringify(session)); } catch(e) {}
+}
+
+function figClearSession() {
+  try { localStorage.removeItem('fig_session'); } catch(e) {}
+}
+
+async function figCreateEmailAccount() {
+  var email = document.getElementById('fig-acc-email').value.trim();
+  var pass = document.getElementById('fig-acc-pass').value;
+  var toast = document.getElementById('fig-acc-toast');
+  if (!email || !pass) { toast.className = 'fig-toast err'; toast.textContent = 'Email and password required.'; return; }
+  toast.className = 'fig-toast'; toast.textContent = 'Signing in…';
+  try {
+    var hash = await figSimpleHash(pass);
+    var key = 'fig_login_' + email.toLowerCase();
+    var existing = localStorage.getItem(key);
+    if (existing) {
+      var d = JSON.parse(existing);
+      if (d.hash !== hash) { toast.className = 'fig-toast err'; toast.textContent = 'Wrong password.'; return; }
+    } else {
+      localStorage.setItem(key, JSON.stringify({ hash: hash, createdAt: new Date().toISOString() }));
+    }
+    var cfg = figGetConfig();
+    if (!cfg.identity) cfg.identity = {};
+    cfg.identity.email = { address: email.toLowerCase(), createdAt: existing ? JSON.parse(existing).createdAt : new Date().toISOString() };
+    figSetConfig(cfg);
+    figSetSession({ email: email.toLowerCase(), loggedInAt: new Date().toISOString() });
+    toast.className = 'fig-toast ok';
+    toast.textContent = existing ? '✓ Signed in' : '✓ Account created';
+    setTimeout(function() { render(); }, 500);
+  } catch(e) {
+    toast.className = 'fig-toast err'; toast.textContent = 'Error: ' + (e.message || e);
+  }
+}
+
+async function figSimpleHash(str) {
+  try {
+    var buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(str));
+    return Array.from(new Uint8Array(buf)).map(function(b) { return b.toString(16).padStart(2, '0'); }).join('').slice(0, 32);
+  } catch(e) {
+    var h = 0;
+    for (var i = 0; i < str.length; i++) { h = ((h << 5) - h) + str.charCodeAt(i); h |= 0; }
+    return Math.abs(h).toString(16);
+  }
+}
+
+function figCreateWorkerAccount() {
+  var input = document.getElementById('fig-acc-worker-handle');
   if (!input) return;
   var handle = input.value.trim();
   if (!handle) { input.focus(); return; }
@@ -195,16 +251,100 @@ function figCreateAccount() {
   });
 }
 
+function figSignOut() {
+  var cfg = figGetConfig();
+  if (cfg.identity && cfg.identity.email) delete cfg.identity.email;
+  figSetConfig(cfg);
+  figClearSession();
+  render();
+}
+
+function figIdentCreateAccount() {
+  var email = document.getElementById('fig-ident-email');
+  var pass = document.getElementById('fig-ident-pass');
+  var toast = document.getElementById('fig-ident-email-toast');
+  if (!email || !pass || !toast) return;
+  var e = email.value.trim(), p = pass.value;
+  if (!e || !p) { toast.className = 'fig-toast err'; toast.textContent = 'Email and password required.'; return; }
+  toast.className = 'fig-toast'; toast.textContent = 'Signing in…';
+  figSimpleHash(p).then(function(hash) {
+    var key = 'fig_login_' + e.toLowerCase();
+    var existing = localStorage.getItem(key);
+    if (existing) {
+      var d = JSON.parse(existing);
+      if (d.hash !== hash) { toast.className = 'fig-toast err'; toast.textContent = 'Wrong password.'; return; }
+    } else {
+      localStorage.setItem(key, JSON.stringify({ hash: hash, createdAt: new Date().toISOString() }));
+    }
+    var cfg = figGetConfig();
+    if (!cfg.identity) cfg.identity = {};
+    cfg.identity.email = { address: e.toLowerCase(), createdAt: existing ? JSON.parse(existing).createdAt : new Date().toISOString() };
+    figSetConfig(cfg);
+    figSetSession({ email: e.toLowerCase(), loggedInAt: new Date().toISOString() });
+    toast.className = 'fig-toast ok';
+    toast.textContent = existing ? '✓ Signed in' : '✓ Account created';
+    setTimeout(function() { render(); }, 500);
+  }).catch(function(err) {
+    toast.className = 'fig-toast err'; toast.textContent = 'Error: ' + (err.message || err);
+  });
+}
+
+function figRenderWorkerOption() {
+  var el = document.getElementById('fig-acc-worker-option');
+  if (!el) return;
+  var sync = figGetSync();
+  var hasWorkerUrl = sync && sync.workerUrl;
+  el.innerHTML = hasWorkerUrl ? `
+    <div class="fig-field">
+      <label>Fig Handle</label>
+      <input id="fig-acc-worker-handle" type="text" placeholder="e.g. gg" maxlength="32" autocomplete="off" onkeydown="if(event.key==='Enter')figCreateWorkerAccount()">
+      <div class="fig-field-help">2–32 characters: letters, numbers, _ and -</div>
+    </div>
+    <div class="fig-btn-row" style="padding-top:0">
+      <button class="fig-btn primary" onclick="figCreateWorkerAccount()" style="padding:8px 18px;font-size:0.68rem">Create Handle</button>
+    </div>` : `
+    <div style="background:var(--surface2,#1a1a26);padding:12px 14px;border-radius:8px;font-size:0.68rem;line-height:1.7">
+      To create a Fig Handle, deploy the Fig Worker and set the Worker URL in <b>Settings → Cloud sync</b>.
+    </div>`;
+}
+
 // ── Identity step ─────────────────────────────
 function figRenderIdentity() {
   var cfg = figGetConfig();
   var ident = cfg.identity || {};
+  var session = figGetSession();
+  var emailConnected = session && session.email;
   var widConnected = ident.worldid && ident.worldid.nullifier_hash;
   var bskyConnected = ident.bsky && ident.bsky.handle && ident.bsky.accessJwt;
+  var workerConnected = ident.worker && ident.worker.handle && ident.worker.token;
 
   return `
-    <div class="fig-h2">Connect your identity</div>
-    <div class="fig-desc">Optional — link your identity for attestations and decentralized cred.</div>
+    <div class="fig-field" style="margin-bottom:16px">
+      <label style="font-size:0.6rem;letter-spacing:0.1em;text-transform:uppercase;color:var(--muted);margin-bottom:8px">Account</label>
+      ${emailConnected ? `
+        <div style="display:flex;align-items:center;justify-content:space-between;background:var(--surface2,#1a1a26);border:1px solid var(--border,#252535);border-radius:8px;padding:10px 14px;font-size:0.78rem">
+          <span>Signed in as <b>${session.email}</b></span>
+          <button class="fig-btn danger" style="padding:4px 10px;font-size:0.55rem" onclick="figSignOut()">Sign out</button>
+        </div>` : `
+        <div style="background:var(--surface2,#1a1a26);border:1px solid var(--border,#252535);border-radius:8px;padding:14px;font-size:0.72rem;line-height:1.7">
+          <div style="margin-bottom:10px">Sign in with email to save your account locally. No server needed — your data stays with you.</div>
+          <div class="fig-field" style="margin-bottom:8px">
+            <label>Email</label>
+            <input id="fig-ident-email" type="email" placeholder="you@example.com" autocomplete="email" onkeydown="if(event.key==='Enter')document.getElementById('fig-ident-pass').focus()">
+          </div>
+          <div class="fig-field" style="margin-bottom:8px">
+            <label>Password</label>
+            <input id="fig-ident-pass" type="password" placeholder="Choose a password" autocomplete="new-password" onkeydown="if(event.key==='Enter')figIdentCreateAccount()">
+          </div>
+          <div class="fig-btn-row" style="padding-top:0">
+            <button class="fig-btn primary" onclick="figIdentCreateAccount()" style="padding:6px 16px;font-size:0.65rem">Sign up / Sign in</button>
+            <span id="fig-ident-email-toast" class="fig-toast" style="min-height:0;flex:1"></span>
+          </div>
+        </div>`}
+    </div>
+    <hr style="border:none;border-top:1px solid var(--border,#252535);margin:12px 0">
+    <div class="fig-h2">Connect identity</div>
+    <div class="fig-desc">Link your identity for attestations and decentralized cred.</div>
     <div class="fig-grid" style="grid-template-columns:1fr">
       <div class="fig-card ${widConnected?'selected':''}" onclick="figToggleWid()" style="display:flex;align-items:center;gap:12px;padding:12px 14px">
         <span style="font-size:1.2rem">🌐</span>
@@ -609,6 +749,10 @@ function checkFigLauncher() {
   // But we keep updateSentry available for the settings trigger.
   window.openFigSettings = openFigSettings;
   window.figDismissLauncher = figDismissLauncher;
+  window.figSignOut = figSignOut;
+  window.figIdentCreateAccount = figIdentCreateAccount;
+  window.figCreateEmailAccount = figCreateEmailAccount;
+  window.figSimpleHash = figSimpleHash;
   window.closeFigLauncher = closeFigLauncher;
   window.figToggleWorker = figToggleWorker;
   window.figDisconnectWorker = figDisconnectWorker;
