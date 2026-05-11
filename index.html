@@ -1682,9 +1682,7 @@ async function syncNow(){
   } catch(e) {
     t.classList.add('err'); t.textContent='Failed: '+(e.message||e);
   }
-}
-}
-
+  }
 async function pullCloud(){
   const s=persistSyncSettings();
   const acc=getAccount();
